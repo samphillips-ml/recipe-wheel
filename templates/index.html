@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Recipe Wheel</title>
+<style>
+  body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; font-family: "Courier New", monospace; }
+
+  #drum-viewport { width: 600px; height: 360px; overflow: hidden; position: relative; border-top: 2px solid #ff0000; border-bottom: 2px solid #ff0000; }
+
+  #selector-bar { position: absolute; top: 50%; transform: translateY(-50%); left: 0; right: 0; height: 40px; border-top: 1px solid #ff0000; border-bottom: 1px solid #ff0000; pointer-events: none; z-index: 5; }
+
+  #drum-strip { position: absolute; top: 0; left: 0; right: 0; }
+
+  .drum-item { height: 40px; display: flex; align-items: center; padding: 0 12px; font-size: 13px; color: #00ff00; border-bottom: 1px solid #001100; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drum-item.center { color: #ffff00; font-weight: bold; }
+  .drum-item .idx { color: #005500; margin-right: 10px; font-size: 10px; flex-shrink: 0; }
+
+  button { margin-top: 20px; width: 600px; padding: 12px; background: #ff0000; color: #fff; border: none; font-family: "Courier New", monospace; font-size: 16px; font-weight: bold; cursor: pointer; letter-spacing: 0.1em; }
+  button:disabled { background: #333; color: #666; cursor: default; }
+
+  #result { margin-top: 16px; width: 600px; font-size: 13px; color: #aaa; min-height: 18px; }
+  #result a { color: #4af; }
+</style>
+</head>
+<body>
+
+<div id="drum-viewport">
+  <div id="selector-bar"></div>
+  <div id="drum-strip"></div>
+</div>
+<button id="spin-btn" onclick="spinDrum()" disabled>SPIN</button>
+<div id="result"></div>
+
+<script>
+const DRUM_H = 40;
+const VISIBLE = 9;
+const CENTER_ROW = Math.floor(VISIBLE / 2);
+
+let recipes = [], totalRecipes = 0, offset = 0, spinning = false;
+const strip = document.getElementById('drum-strip');
+const btn = document.getElementById('spin-btn');
+
+function setStripToItem(i) { strip.style.transform = `translateY(${-i * DRUM_H + CENTER_ROW * DRUM_H}px)`; }
+
+function buildStrip() {
+  strip.innerHTML = '';
+  recipes.forEach((r, i) => {
+    const d = document.createElement('div');
+    d.className = 'drum-item';
+    d.innerHTML = `<span class="idx">#${(offset+i+1).toLocaleString()}</span>${r.title.replace(/&/g,'&amp;').replace(/</g,'&lt;')}`;
+    strip.appendChild(d);
+  });
+}
+
+function updateHighlight(n) { strip.querySelectorAll('.drum-item').forEach((el,i) => el.classList.toggle('center', i===n)); }
+function easeOut(t) { return 1 - Math.pow(1-t, 4); }
+
+let audioCtx, lastTickItem = -1;
+function playTick() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = 400 + Math.random()*400; o.type = 'square';
+    g.gain.setValueAtTime(0.06, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+0.03);
+    o.start(); o.stop(audioCtx.currentTime+0.035);
+  } catch(e) {}
+}
+
+async function loadInitialWindow() {
+  const d = await fetch('/api/window').then(r=>r.json());
+  recipes = d.recipes; totalRecipes = d.total; offset = d.start;
+  buildStrip(); setStripToItem(d.landing); updateHighlight(d.landing);
+  btn.disabled = false;
+}
+
+async function spinDrum() {
+  if (spinning) return;
+  spinning = true; btn.disabled = true; btn.textContent = '...';
+  document.getElementById('result').innerHTML = '';
+
+  const targetIdx = Math.floor(Math.random() * totalRecipes);
+  const d = await fetch(`/api/window?center=${targetIdx}`).then(r=>r.json());
+  recipes = d.recipes; offset = d.start;
+  const landingItem = d.landing;
+  buildStrip();
+
+  const passes = 4 + Math.floor(Math.random()*3);
+  const totalItems = landingItem + passes * recipes.length;
+  const duration = 7000 + Math.random()*3000;
+  const startTime = performance.now();
+  setStripToItem(0);
+
+  function tick(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    const current = (0 + totalItems * easeOut(t)) % recipes.length;
+    strip.style.transform = `translateY(${-current * DRUM_H + CENTER_ROW * DRUM_H}px)`;
+    const ci = Math.floor(current);
+    if (ci !== lastTickItem) { lastTickItem = ci; playTick(); }
+    if (t < 1) { requestAnimationFrame(tick); return; }
+
+    setStripToItem(landingItem);
+    updateHighlight(landingItem);
+    spinning = false; btn.disabled = false; btn.textContent = 'SPIN';
+
+    fetch(`/api/recipe/${targetIdx}`).then(r=>r.json()).then(data => {
+      const el = document.getElementById('result');
+      const link = data.link
+        ? `<a href="${data.link}" target="_blank">${data.link}</a>`
+        : `<a href="https://www.google.com/search?q=${encodeURIComponent(data.title+' recipe')}" target="_blank">[search]</a>`;
+      el.innerHTML = `${data.title} &mdash; #${(data.index+1).toLocaleString()} of ${data.total.toLocaleString()} &mdash; ${link}`;
+    });
+  }
+  requestAnimationFrame(tick);
+}
+
+loadInitialWindow();
+</script>
+</body>
+</html>
